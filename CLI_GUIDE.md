@@ -1,6 +1,6 @@
 # shinydb CLI Guide
 
-An interactive command-line interface for shinydb (Yet Another Database) with unified management API and YQL query support.
+An interactive command-line interface for ShinyDb with unified management API and YQL query support.
 
 ## Table of Contents
 

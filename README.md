@@ -1,6 +1,6 @@
 # shinydb-shell
 
-Interactive command-line interface for shinydb (Yet Another Database).
+Interactive command-line interface for ShinyDb.
 
 ## Features
 
