@@ -3,6 +3,7 @@ const shinydb = @import("shinydb_zig_client");
 const ShinyDbClient = shinydb.ShinyDbClient;
 const Query = shinydb.Query;
 const yql = shinydb.yql;
+const bson = @import("bson");
 const formatter = @import("formatter.zig");
 
 // Command history manager
@@ -211,10 +212,10 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
 
             // Handle escape sequences for arrow keys (ESC [ A = up, ESC [ B = down)
             if (char_buf[0] == 27) { // ESC
-                var seq_buf: [2]u8 = undefined;
+                var seq_buf: [8]u8 = undefined;
                 const seq_read = std.posix.read(stdin_fd, &seq_buf) catch 0;
 
-                if (seq_read == 2 and seq_buf[0] == '[') {
+                if (seq_read >= 2 and seq_buf[0] == '[') {
                     if (seq_buf[1] == 'A') {
                         // Up arrow - retrieve previous command
                         if (history.getPrevious()) |prev_cmd| {
@@ -241,23 +242,29 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
                             continue;
                         }
                     }
+                    // Handle other escape sequences (left/right arrow, etc.) - just ignore
                 }
-                // If not a recognized escape sequence, ignore it
+                // If not a recognized escape sequence, consume and ignore it
                 continue;
             }
 
-            // Handle Enter key (both \r and \n in raw mode)
+            // Handle Enter key (both \r and \n in raw mode) - check BEFORE control char filter
             if (char_buf[0] == '\r' or char_buf[0] == '\n') {
                 std.debug.print("\n", .{}); // Move to next line
                 break;
             }
 
-            // Handle backspace
+            // Handle backspace - check BEFORE control char filter
             if (char_buf[0] == 127 or char_buf[0] == 8) {
                 if (line_pos > 0) {
                     line_pos -= 1;
                     std.debug.print("\x08 \x08", .{});
                 }
+                continue;
+            }
+
+            // Filter out other control characters (except tab)
+            if (char_buf[0] < 32 and char_buf[0] != 9) { // 9 = tab
                 continue;
             }
 
@@ -267,7 +274,16 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
             std.debug.print("{c}", .{char_buf[0]});
         }
 
-        const input = std.mem.trim(u8, line_buf[0..line_pos], " \t\r");
+        // Validate and clean the input
+        const raw_input = line_buf[0..line_pos];
+
+        // Check if input is valid UTF-8, if not, skip it
+        if (!std.unicode.utf8ValidateSlice(raw_input)) {
+            std.debug.print("\n[Invalid UTF-8 input, skipping]\n", .{});
+            continue;
+        }
+
+        const input = std.mem.trim(u8, raw_input, " \t\r");
 
         if (input.len == 0) continue;
 
@@ -370,37 +386,84 @@ fn printShellHelp() void {
 // ========== Management Commands ==========
 
 fn listSpaces(client: *ShinyDbClient) void {
-    const spaces = client.list(.Space, null) catch |err| {
+    const data = client.list(.Space, null) catch |err| {
         std.debug.print("Failed to list spaces: {}\n", .{err});
         return;
     };
-    defer client.allocator.free(spaces);
-    std.debug.print("Spaces: {s}\n", .{spaces});
+    defer client.allocator.free(data);
+
+    // Decode BSON response
+    const SpaceList = struct { spaces: []const shinydb.proto.Space };
+    var decoder = bson.Decoder.init(client.allocator, data);
+    const result = decoder.decode(SpaceList) catch {
+        std.debug.print("Failed to decode response\n", .{});
+        return;
+    };
+    defer client.allocator.free(result.spaces);
+
+    std.debug.print("Spaces:\n", .{});
+    for (result.spaces) |space| {
+        std.debug.print("  {s}", .{space.ns});
+        if (space.description) |d| {
+            std.debug.print(" - {s}", .{d});
+        }
+        std.debug.print("\n", .{});
+    }
 }
 
 fn listStores(client: *ShinyDbClient, space_filter: ?[]const u8) void {
-    const stores = client.list(.Store, space_filter) catch |err| {
+    const data = client.list(.Store, space_filter) catch |err| {
         std.debug.print("Failed to list stores: {}\n", .{err});
         return;
     };
-    defer client.allocator.free(stores);
+    defer client.allocator.free(data);
+
+    // Decode BSON response
+    const StoreList = struct { stores: []const shinydb.proto.Store };
+    var decoder = bson.Decoder.init(client.allocator, data);
+    const result = decoder.decode(StoreList) catch {
+        std.debug.print("Failed to decode response\n", .{});
+        return;
+    };
+    defer client.allocator.free(result.stores);
+
     if (space_filter) |space| {
-        std.debug.print("Stores in '{s}': {s}\n", .{ space, stores });
+        std.debug.print("Stores in '{s}':\n", .{space});
     } else {
-        std.debug.print("All stores: {s}\n", .{stores});
+        std.debug.print("All stores:\n", .{});
+    }
+    for (result.stores) |store| {
+        std.debug.print("  {s} (store_id={})", .{ store.ns, store.store_id });
+        if (store.description) |d| {
+            std.debug.print(" - {s}", .{d});
+        }
+        std.debug.print("\n", .{});
     }
 }
 
 fn listIndexes(client: *ShinyDbClient, store_filter: ?[]const u8) void {
-    const indexes = client.list(.Index, store_filter) catch |err| {
+    const data = client.list(.Index, store_filter) catch |err| {
         std.debug.print("Failed to list indexes: {}\n", .{err});
         return;
     };
-    defer client.allocator.free(indexes);
+    defer client.allocator.free(data);
+
+    // Decode BSON response
+    const IndexList = struct { indexes: []const shinydb.proto.Index };
+    var decoder = bson.Decoder.init(client.allocator, data);
+    const result = decoder.decode(IndexList) catch {
+        std.debug.print("Failed to decode response\n", .{});
+        return;
+    };
+    defer client.allocator.free(result.indexes);
+
     if (store_filter) |store| {
-        std.debug.print("Indexes for '{s}': {s}\n", .{ store, indexes });
+        std.debug.print("Indexes for '{s}':\n", .{store});
     } else {
-        std.debug.print("All indexes: {s}\n", .{indexes});
+        std.debug.print("All indexes:\n", .{});
+    }
+    for (result.indexes) |index| {
+        std.debug.print("  {s} on field '{s}' (unique={}, store_id={})\n", .{ index.ns, index.field, index.unique, index.store_id });
     }
 }
 
@@ -470,6 +533,18 @@ fn handleCreate(client: *ShinyDbClient, allocator: std.mem.Allocator, args: []co
             std.debug.print("Usage: .create index <space.store.index> <field> <String|I32|I64|F64|Boolean>\n", .{});
             return;
         };
+
+        // Validate UTF-8 before sending
+        if (!std.unicode.utf8ValidateSlice(ns)) {
+            std.debug.print("Error: Index name contains invalid UTF-8 characters\n", .{});
+            std.debug.print("Debug: ns bytes = {any}\n", .{ns});
+            return;
+        }
+        if (!std.unicode.utf8ValidateSlice(field)) {
+            std.debug.print("Error: Field name contains invalid UTF-8 characters\n", .{});
+            std.debug.print("Debug: field bytes = {any}\n", .{field});
+            return;
+        }
 
         const field_type: shinydb.FieldType = if (std.mem.eql(u8, field_type_str, "String"))
             .String
