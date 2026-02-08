@@ -246,7 +246,13 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
                 continue;
             }
 
-            if (char_buf[0] == '\n') break;
+            // Handle Enter key (both \r and \n in raw mode)
+            if (char_buf[0] == '\r' or char_buf[0] == '\n') {
+                std.debug.print("\n", .{}); // Move to next line
+                break;
+            }
+
+            // Handle backspace
             if (char_buf[0] == 127 or char_buf[0] == 8) {
                 if (line_pos > 0) {
                     line_pos -= 1;
@@ -254,6 +260,8 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
                 }
                 continue;
             }
+
+            // Echo regular characters
             line_buf[line_pos] = char_buf[0];
             line_pos += 1;
             std.debug.print("{c}", .{char_buf[0]});
