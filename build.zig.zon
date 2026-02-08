@@ -1,0 +1,12 @@
+.{
+    .name = .yadb_cli,
+    .version = "0.1.0",
+    .fingerprint = 0xafb2ec383e9c65a8,
+    .minimum_zig_version = "0.14.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}
