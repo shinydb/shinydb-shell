@@ -325,6 +325,14 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
             } else if (std.mem.startsWith(u8, input, ".debug ")) {
                 const query = std.mem.trim(u8, input[7..], " ");
                 debugQuery(allocator, query);
+            } else if (std.mem.eql(u8, input, ".shutdown")) {
+                handleShutdown(client);
+                // After shutdown, exit the shell
+                std.debug.print("Database shutdown initiated. Exiting shell.\n", .{});
+                break;
+            } else if (std.mem.startsWith(u8, input, ".connect")) {
+                const args_str = std.mem.trim(u8, input[".connect".len..], " ");
+                handleConnect(client, args_str);
             } else {
                 std.debug.print("Unknown command: {s}\n", .{input});
                 std.debug.print("Type .help for available commands.\n", .{});
@@ -344,6 +352,9 @@ fn printShellHelp() void {
         \\    .help              Show this help
         \\    .cls               Clear screen
         \\    .exit, .quit       Exit the shell
+        \\    .shutdown          Shutdown the database server
+        \\    .connect <host> <port> [userid] [password]
+        \\                        Connect to a server (default creds: admin/admin)
         \\
         \\MANAGEMENT COMMANDS:
         \\    .spaces                     List all spaces
@@ -656,6 +667,55 @@ fn handleDrop(client: *ShinyDbClient, args: []const u8) void {
         std.debug.print("Unknown entity type: {s}\n", .{entity_type});
         std.debug.print("Use: space, store, index, or user\n", .{});
     }
+}
+
+fn handleShutdown(client: *ShinyDbClient) void {
+    std.debug.print("Sending shutdown command to database server...\n", .{});
+
+    client.shutdown() catch |err| {
+        std.debug.print("Failed to shutdown server: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("✓ Server shutdown command sent successfully\n", .{});
+}
+
+fn handleConnect(client: *ShinyDbClient, args_str: []const u8) void {
+    if (args_str.len == 0) {
+        std.debug.print("Usage: .connect <host> <port> [userid] [password]\n", .{});
+        std.debug.print("  Defaults to admin/admin when credentials are omitted.\n", .{});
+        return;
+    }
+
+    // Parse arguments: host port [userid] [password]
+    var it = std.mem.tokenizeAny(u8, args_str, " \t");
+    const new_host = it.next() orelse {
+        std.debug.print("Error: host is required.\n", .{});
+        return;
+    };
+    const port_str = it.next() orelse {
+        std.debug.print("Error: port is required.\n", .{});
+        return;
+    };
+    const new_port = std.fmt.parseInt(u16, port_str, 10) catch {
+        std.debug.print("Error: invalid port '{s}'.\n", .{port_str});
+        return;
+    };
+    const userid = it.next() orelse "admin";
+    const password = it.next() orelse "admin";
+    _ = userid;
+    _ = password;
+
+    // Disconnect existing connection
+    client.disconnect();
+
+    std.debug.print("Connecting to shinydb at {s}:{d}...\n", .{ new_host, new_port });
+    client.connect(new_host, new_port) catch |err| {
+        std.debug.print("Connection failed: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Connected to {s}:{d}\n", .{ new_host, new_port });
 }
 
 // ========== Query Commands ==========
