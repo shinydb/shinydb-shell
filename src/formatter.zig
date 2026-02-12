@@ -38,22 +38,8 @@ pub fn printBsonArrayAsTable(allocator: std.mem.Allocator, bson_data: []const u8
 
     var pos: usize = 0;
 
-    // Skip leading '[' if present
-    if (bson_data[0] == '[') {
-        pos = 1;
-    }
-
-    // Parse BSON documents until we hit ']' or end of data
+    // Parse concatenated BSON documents until end of data
     while (pos < bson_data.len) {
-        // Check for closing ']'
-        if (bson_data[pos] == ']') break;
-
-        // Skip whitespace and commas
-        while (pos < bson_data.len and (bson_data[pos] == ' ' or bson_data[pos] == '\n' or bson_data[pos] == '\r' or bson_data[pos] == '\t' or bson_data[pos] == ',')) {
-            pos += 1;
-        }
-
-        if (pos >= bson_data.len or bson_data[pos] == ']') break;
 
         // Read BSON document size (first 4 bytes, little endian)
         if (pos + 4 > bson_data.len) {

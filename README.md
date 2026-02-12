@@ -156,3 +156,95 @@ EmployeeID sum(TotalDue)
 288 2,062,393.1371
 289 9,585,124.9477
 290 5,087,977.2120
+
+
+
+shinydb> sales.orders.groupBy(EmployeeID).aggregate(Order: count(SalesOrderID)).orderBy(EmployeeID, desc)
+└─[Document 0]:
+   ├─groups: [17 items]
+   │  ├─[0]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 287
+   │  │  └─values:
+   │  │     └─Order: 39
+   │  ├─[1]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 274
+   │  │  └─values:
+   │  │     └─Order: 48
+   │  ├─[2]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 290
+   │  │  └─values:
+   │  │     └─Order: 175
+   │  ├─[3]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 277
+   │  │  └─values:
+   │  │     └─Order: 473
+   │  ├─[4]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 288
+   │  │  └─values:
+   │  │     └─Order: 130
+   │  ├─[5]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 279
+   │  │  └─values:
+   │  │     └─Order: 429
+   │  ├─[6]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 280
+   │  │  └─values:
+   │  │     └─Order: 95
+   │  ├─[7]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 275
+   │  │  └─values:
+   │  │     └─Order: 450
+   │  ├─[8]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 286
+   │  │  └─values:
+   │  │     └─Order: 109
+   │  ├─[9]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 284
+   │  │  └─values:
+   │  │     └─Order: 140
+   │  ├─[10]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 281
+   │  │  └─values:
+   │  │     └─Order: 242
+   │  ├─[11]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 283
+   │  │  └─values:
+   │  │     └─Order: 189
+   │  ├─[12]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 282
+   │  │  └─values:
+   │  │     └─Order: 271
+   │  ├─[13]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 276
+   │  │  └─values:
+   │  │     └─Order: 418
+   │  ├─[14]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 285
+   │  │  └─values:
+   │  │     └─Order: 16
+   │  ├─[15]:
+   │  │  ├─key:
+   │  │  │  └─EmployeeID: 278
+   │  │  └─values:
+   │  │     └─Order: 234
+   │  └─[16]:
+   │     ├─key:
+   │     │  └─EmployeeID: 289
+   │     └─values:
+   │        └─Order: 348
+   └─total_groups: 17

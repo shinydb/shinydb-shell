@@ -145,11 +145,13 @@ fn printHelp() void {
         \\YQL SYNTAX:
         \\    space.store[.filter(...)][.orderBy(...)][.limit(n)]
         \\    space.store[.groupBy(...)][.aggregate(...)]
+        \\    space.store[.filter(...)].count()
         \\
         \\QUICK EXAMPLES:
         \\    myapp.users.limit(10)
         \\    myapp.users.filter(age > 21)
         \\    myapp.orders.filter(status = "active").orderBy(date, desc).limit(5)
+        \\    myapp.users.filter(age > 21).count()
         \\
     ;
     std.debug.print("{s}", .{help});
@@ -374,7 +376,8 @@ fn printShellHelp() void {
         \\
         \\YQL SYNTAX:
         \\    space.store.filter(field op value).orderBy(field, asc|desc).limit(n)
-        \\    space.store.groupBy(field1, field2).aggregate(name: func(field), ...)
+        \\    space.store.groupBy(field1, field2).aggregate(name: func(field))
+        \\    space.store.filter(field op value).count()
         \\
         \\FILTER OPERATORS:
         \\    =, !=, >, >=, <, <=, ~(regex), in, contains, exists
@@ -386,6 +389,7 @@ fn printShellHelp() void {
         \\    test_app.users.limit(10)
         \\    test_app.users.filter(age > 21).limit(5)
         \\    test_app.orders.filter(status = "active").orderBy(created_at, desc).limit(20)
+        \\    test_app.users.filter(age > 21).count()
         \\
         \\HISTORY:
         \\    ↑ / ↓ arrow keys    Navigate command history
@@ -832,6 +836,11 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
         }
     }
 
+    // Apply count-only mode
+    if (query_ast.query_type == .count) {
+        _ = query.countOnly();
+    }
+
     // Execute query
     var response = query.run() catch |err| {
         std.debug.print("Query failed: {}\n", .{err});
@@ -840,8 +849,25 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
     };
     defer response.deinit();
 
-    // Print result in tabular format
+    // Print result
     if (response.data) |data| {
+        // For count queries, parse the single BSON doc and print count directly
+        if (query_ast.query_type == .count) {
+            var count_doc = bson.BsonDocument.init(allocator, data, false) catch {
+                std.debug.print("Error parsing count response\n", .{});
+                return;
+            };
+            defer count_doc.deinit();
+            if (count_doc.getInt64("count") catch null) |c| {
+                std.debug.print("{d}\n", .{c});
+            } else if (count_doc.getInt32("count") catch null) |c| {
+                std.debug.print("{d}\n", .{c});
+            } else {
+                std.debug.print("(count unavailable)\n", .{});
+            }
+            return;
+        }
+
         var stdout_buf: [4096]u8 = undefined;
         const stdout_file = std.Io.File.stdout();
         var stdout_w = stdout_file.writer(io, &stdout_buf);
