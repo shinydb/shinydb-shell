@@ -4,36 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Get shinydb-zig-client dependency (adjust path as needed)
-    const shinydb_zig_client_path = b.path("../shinydb-zig-client/src/root.zig");
-    const proto_path = b.path("../proto/src/root.zig");
-    const bson_path = b.path("../bson/src/root.zig");
+    // Get dependencies via the package manager
+    const bson_dep = b.dependency("bson", .{});
+    const bson_module = bson_dep.module("bson");
 
-    // Create modules
-    const bson_module = b.createModule(.{
-        .root_source_file = bson_path,
-        .target = target,
-        .optimize = optimize,
-    });
+    const proto_dep = b.dependency("proto", .{});
+    const proto_module = proto_dep.module("proto");
 
-    const proto_module = b.createModule(.{
-        .root_source_file = proto_path,
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "bson", .module = bson_module },
-        },
-    });
-
-    const shinydb_zig_client = b.createModule(.{
-        .root_source_file = shinydb_zig_client_path,
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "proto", .module = proto_module },
-            .{ .name = "bson", .module = bson_module },
-        },
-    });
+    const client_dep = b.dependency("shinydb_zig_client", .{});
+    const client_module = client_dep.module("shinydb_zig_client");
 
     // Create shinydb-shell executable
     const exe = b.addExecutable(.{
@@ -43,8 +22,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "shinydb_zig_client", .module = shinydb_zig_client },
+                .{ .name = "shinydb_zig_client", .module = client_module },
                 .{ .name = "bson", .module = bson_module },
+                .{ .name = "proto", .module = proto_module },
             },
         }),
     });

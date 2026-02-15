@@ -1,8 +1,19 @@
 .{
-    .name = .yadb_cli,
+    .name = .shinydb_shell,
     .version = "0.1.0",
     .fingerprint = 0xafb2ec383e9c65a8,
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.16.0-dev.2565+684032671",
+    .dependencies = .{
+        .proto = .{
+            .path = "../proto",
+        },
+        .bson = .{
+            .path = "../bson",
+        },
+        .shinydb_zig_client = .{
+            .path = "../shinydb-zig-client",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
