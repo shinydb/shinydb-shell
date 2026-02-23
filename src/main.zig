@@ -77,27 +77,25 @@ fn enableRawMode(stdin_fd: std.posix.fd_t) !?std.posix.termios {
     return original;
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     // Parse command line args for host/port
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 23469;
 
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--host") and i + 1 < args.len) {
-            host = args[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, args[i], "--port") and i + 1 < args.len) {
-            port = std.fmt.parseInt(u16, args[i + 1], 10) catch 23469;
-            i += 1;
-        } else if (std.mem.eql(u8, args[i], "--help") or std.mem.eql(u8, args[i], "-h")) {
+    var args_iter = std.process.Args.Iterator.init(init.args);
+    _ = args_iter.next(); // skip program name
+
+    while (args_iter.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--host")) {
+            host = args_iter.next() orelse "127.0.0.1";
+        } else if (std.mem.eql(u8, arg, "--port")) {
+            const port_str = args_iter.next() orelse "23469";
+            port = std.fmt.parseInt(u16, port_str, 10) catch 23469;
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             printHelp();
             return;
         }
@@ -122,6 +120,8 @@ fn printHelp() void {
         \\SHELL COMMANDS:
         \\    .help              Show detailed help
         \\    .exit, .quit       Exit the shell
+        \\    .offline           Put server in offline mode (admin ops only)
+        \\    .online            Bring server back online (all ops)
         \\
         \\  Management:
         \\    .spaces            List all spaces
@@ -332,6 +332,15 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
                 // After shutdown, exit the shell
                 std.debug.print("Database shutdown initiated. Exiting shell.\n", .{});
                 break;
+            } else if (std.mem.startsWith(u8, input, ".stats")) {
+                const args_str = std.mem.trim(u8, input[".stats".len..], " ");
+                handleStats(allocator, client, io, args_str);
+            } else if (std.mem.eql(u8, input, ".vlogs")) {
+                handleVlogs(allocator, client, io);
+            } else if (std.mem.eql(u8, input, ".offline")) {
+                handleSetMode(allocator, client, false);
+            } else if (std.mem.eql(u8, input, ".online")) {
+                handleSetMode(allocator, client, true);
             } else if (std.mem.startsWith(u8, input, ".connect")) {
                 const args_str = std.mem.trim(u8, input[".connect".len..], " ");
                 handleConnect(client, args_str);
@@ -355,6 +364,10 @@ fn printShellHelp() void {
         \\    .cls               Clear screen
         \\    .exit, .quit       Exit the shell
         \\    .shutdown          Shutdown the database server
+        \\    .stats [layer]     Show engine metrics (wal|db|index|vlog|gc or all)
+        \\    .vlogs             Show vlog storage stats (dead ratio, bytes, counts)
+        \\    .offline           Put server in offline mode (admin-only ops)
+        \\    .online            Bring server back to online mode (all ops)
         \\    .connect <host> <port> [userid] [password]
         \\                        Connect to a server (default creds: admin/admin)
         \\
@@ -684,6 +697,81 @@ fn handleShutdown(client: *ShinyDbClient) void {
     std.debug.print("✓ Server shutdown command sent successfully\n", .{});
 }
 
+fn handleStats(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype, args_str: []const u8) void {
+    const tag: shinydb.StatsTag = if (args_str.len == 0)
+        .AllStats
+    else if (std.mem.eql(u8, args_str, "wal"))
+        .WalStats
+    else if (std.mem.eql(u8, args_str, "db"))
+        .DbStats
+    else if (std.mem.eql(u8, args_str, "index"))
+        .IndexStats
+    else if (std.mem.eql(u8, args_str, "vlog"))
+        .VLogStats
+    else if (std.mem.eql(u8, args_str, "gc"))
+        .GcStats
+    else {
+        std.debug.print("Usage: .stats [wal|db|index|vlog|gc]\n", .{});
+        std.debug.print("  No argument shows all stats.\n", .{});
+        return;
+    };
+
+    const data = client.stats(tag) catch |err| {
+        std.debug.print("Failed to get stats: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(data);
+
+    var stdout_buf: [4096]u8 = undefined;
+    const stdout_file = std.Io.File.stdout();
+    var stdout_w = stdout_file.writer(io, &stdout_buf);
+    const out_writer = &stdout_w.interface;
+
+    formatter.printBsonDocument(allocator, data, out_writer) catch {
+        std.debug.print("Failed to format stats\n", .{});
+    };
+
+    out_writer.flush() catch {};
+}
+
+fn handleVlogs(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype) void {
+    const data = client.listVlogs() catch |err| {
+        std.debug.print("Failed to get vlog info: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(data);
+
+    var stdout_buf: [4096]u8 = undefined;
+    const stdout_file = std.Io.File.stdout();
+    var stdout_w = stdout_file.writer(io, &stdout_buf);
+    const out_writer = &stdout_w.interface;
+
+    formatter.printBsonArrayAsTable(allocator, data, out_writer) catch {
+        std.debug.print("Failed to format vlog data\n", .{});
+    };
+
+    out_writer.flush() catch {};
+}
+
+fn handleSetMode(allocator: std.mem.Allocator, client: *ShinyDbClient, online: bool) void {
+    const mode_str: []const u8 = if (online) "online" else "offline";
+    std.debug.print("Setting server mode to '{s}'...\n", .{mode_str});
+
+    const data = client.setMode(online) catch |err| {
+        std.debug.print("Failed to set mode: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(data);
+
+    if (online) {
+        std.debug.print("✓ Server is now ONLINE — all operations permitted\n", .{});
+    } else {
+        std.debug.print("✓ Server is now OFFLINE — only admin operations permitted\n", .{});
+        std.debug.print("  Run GC with: .collect <vlog_id>\n", .{});
+        std.debug.print("  Bring back online with: .online\n", .{});
+    }
+}
+
 fn handleConnect(client: *ShinyDbClient, args_str: []const u8) void {
     if (args_str.len == 0) {
         std.debug.print("Usage: .connect <host> <port> [userid] [password]\n", .{});
@@ -744,7 +832,9 @@ fn debugQuery(allocator: std.mem.Allocator, query: []const u8) void {
         std.debug.print("  Skip: {d}\n", .{sk});
     }
     if (query_ast.order_by) |ob| {
-        std.debug.print("  OrderBy: {s} {s}\n", .{ ob.field, ob.direction.toString() });
+        for (ob.items) |spec| {
+            std.debug.print("  OrderBy: {s} {s}\n", .{ spec.field, spec.direction.toString() });
+        }
     }
 
     const json = query_ast.toJson(allocator) catch |err| {
@@ -804,7 +894,9 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
 
     // Apply orderBy
     if (query_ast.order_by) |ob| {
-        _ = query.orderBy(ob.field, ob.direction);
+        for (ob.items) |spec| {
+            _ = query.orderBy(spec.field, spec.direction);
+        }
     }
 
     // Apply groupBy (if any)

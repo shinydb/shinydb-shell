@@ -230,6 +230,5 @@ pub fn printBsonDocument(allocator: std.mem.Allocator, bson_data: []const u8, wr
     var doc = try bson.BsonDocument.init(allocator, bson_data, false);
     defer doc.deinit();
 
-    try writer.print("BSON Document ({d} bytes)\n", .{bson_data.len});
-    try writer.print("TODO: Format hierarchically\n", .{});
+    try printDocumentHierarchical(allocator, doc, writer, "");
 }

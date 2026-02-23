@@ -1,7 +1,7 @@
 .{
     .name = .shinydb_shell,
     .version = "0.1.0",
-    .fingerprint = 0xafb2ec383e9c65a8,
+    .fingerprint = 0xa843a981eedb86a7,
     .minimum_zig_version = "0.16.0-dev.2565+684032671",
     .dependencies = .{
         .proto = .{
