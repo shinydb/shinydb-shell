@@ -175,7 +175,14 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
     };
     defer client.disconnect();
 
-    std.debug.print("Connected! Type .help for commands, .exit to quit.\n\n", .{});
+    std.debug.print("Connected. Authenticating...\n", .{});
+    if (client.authenticate("admin", "admin")) |result| {
+        var auth_result = result;
+        defer auth_result.deinit();
+        std.debug.print("✓ Logged in as admin. Type .help for commands, .exit to quit.\n\n", .{});
+    } else |err| {
+        std.debug.print("Auto-login failed ({}). Use .login <username> <password>.\n\n", .{err});
+    }
 
     // Initialize command history
     var history = CommandHistory.init(allocator);
@@ -337,10 +344,22 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
                 handleStats(allocator, client, io, args_str);
             } else if (std.mem.eql(u8, input, ".vlogs")) {
                 handleVlogs(allocator, client, io);
+            } else if (std.mem.startsWith(u8, input, ".collect")) {
+                const args_str = std.mem.trim(u8, input[".collect".len..], " ");
+                try handleCollect(allocator, client, io, args_str);
+            } else if (std.mem.startsWith(u8, input, ".backup")) {
+                const args_str = std.mem.trim(u8, input[".backup".len..], " ");
+                try handleBackup(allocator, client, io, args_str);
+            } else if (std.mem.startsWith(u8, input, ".restore")) {
+                const args_str = std.mem.trim(u8, input[".restore".len..], " ");
+                try handleRestore(allocator, client, io, args_str);
             } else if (std.mem.eql(u8, input, ".offline")) {
                 handleSetMode(allocator, client, false);
             } else if (std.mem.eql(u8, input, ".online")) {
                 handleSetMode(allocator, client, true);
+            } else if (std.mem.startsWith(u8, input, ".login")) {
+                const args_str = std.mem.trim(u8, input[".login".len..], " \t");
+                handleLogin(client, args_str);
             } else if (std.mem.startsWith(u8, input, ".connect")) {
                 const args_str = std.mem.trim(u8, input[".connect".len..], " ");
                 handleConnect(client, args_str);
@@ -363,6 +382,7 @@ fn printShellHelp() void {
         \\    .help              Show this help
         \\    .cls               Clear screen
         \\    .exit, .quit       Exit the shell
+        \\    .login <user> <pass>  Authenticate (auto-login as admin on connect)
         \\    .shutdown          Shutdown the database server
         \\    .stats [layer]     Show engine metrics (wal|db|index|vlog|gc or all)
         \\    .vlogs             Show vlog storage stats (dead ratio, bytes, counts)
@@ -696,6 +716,85 @@ fn handleShutdown(client: *ShinyDbClient) void {
 
     std.debug.print("✓ Server shutdown command sent successfully\n", .{});
 }
+fn handleCollect(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype, args_str: []const u8) !void {
+    if (args_str.len == 0) {
+        std.debug.print("Usage: .collect <vlog id>\n", .{});
+        return;
+    } else {
+        const vlog_id: u8 = try std.fmt.parseInt(u8, args_str, 8);
+        const data = client.collect(vlog_id) catch |err| {
+            std.debug.print("Garbage Collection Failed: {}\n", .{err});
+            return;
+        };
+        defer allocator.free(data);
+        var stdout_buf: [4096]u8 = undefined;
+        const stdout_file = std.Io.File.stdout();
+        var stdout_w = stdout_file.writer(io, &stdout_buf);
+        const out_writer = &stdout_w.interface;
+
+        formatter.printBsonDocument(allocator, data, out_writer) catch {
+            std.debug.print("Failed to format output\n", .{});
+        };
+
+        out_writer.flush() catch {};
+    }
+}
+
+fn handleBackup(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype, args_str: []const u8) !void {
+    if (args_str.len == 0) {
+        std.debug.print("Usage: .backup <backup_path>\n", .{});
+        return;
+    } else {
+        const data = client.backup(args_str) catch |err| {
+            std.debug.print("Backup Failed: {}\n", .{err});
+            return;
+        };
+        defer allocator.free(data);
+        var stdout_buf: [4096]u8 = undefined;
+        const stdout_file = std.Io.File.stdout();
+        var stdout_w = stdout_file.writer(io, &stdout_buf);
+        const out_writer = &stdout_w.interface;
+
+        formatter.printBsonDocument(allocator, data, out_writer) catch {
+            std.debug.print("Failed to format output\n", .{});
+        };
+
+        out_writer.flush() catch {};
+    }
+}
+
+fn handleRestore(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype, args: []const u8) !void {
+    if (args.len == 0) {
+        std.debug.print("Please pass backup path and target path as an argument...", .{});
+        return;
+    } else {
+        var it = std.mem.tokenizeAny(u8, args, " \t");
+        const backup_path = it.next() orelse {
+            std.debug.print("Usage: .restore <backup_path> <target_path>\n", .{});
+            return;
+        };
+        const target_path = it.next() orelse {
+            std.debug.print("Usage: .restore <backup_path> <target_path>\n", .{});
+            return;
+        };
+
+        const data = client.restore(backup_path, target_path) catch |err| {
+            std.debug.print("Restore Failed: {}\n", .{err});
+            return;
+        };
+        defer allocator.free(data);
+        var stdout_buf: [4096]u8 = undefined;
+        const stdout_file = std.Io.File.stdout();
+        var stdout_w = stdout_file.writer(io, &stdout_buf);
+        const out_writer = &stdout_w.interface;
+
+        formatter.printBsonDocument(allocator, data, out_writer) catch {
+            std.debug.print("Failed to format output\n", .{});
+        };
+
+        out_writer.flush() catch {};
+    }
+}
 
 fn handleStats(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype, args_str: []const u8) void {
     const tag: shinydb.StatsTag = if (args_str.len == 0)
@@ -772,6 +871,24 @@ fn handleSetMode(allocator: std.mem.Allocator, client: *ShinyDbClient, online: b
     }
 }
 
+fn handleLogin(client: *ShinyDbClient, args: []const u8) void {
+    var it = std.mem.tokenizeAny(u8, args, " \t");
+    const username = it.next() orelse {
+        std.debug.print("Usage: .login <username> <password>\n", .{});
+        return;
+    };
+    const password = it.next() orelse {
+        std.debug.print("Usage: .login <username> <password>\n", .{});
+        return;
+    };
+    var result = client.authenticate(username, password) catch |err| {
+        std.debug.print("Login failed: {}\n", .{err});
+        return;
+    };
+    defer result.deinit();
+    std.debug.print("✓ Logged in as '{s}'\n", .{username});
+}
+
 fn handleConnect(client: *ShinyDbClient, args_str: []const u8) void {
     if (args_str.len == 0) {
         std.debug.print("Usage: .connect <host> <port> [userid] [password]\n", .{});
@@ -795,8 +912,6 @@ fn handleConnect(client: *ShinyDbClient, args_str: []const u8) void {
     };
     const userid = it.next() orelse "admin";
     const password = it.next() orelse "admin";
-    _ = userid;
-    _ = password;
 
     // Disconnect existing connection
     client.disconnect();
@@ -807,7 +922,12 @@ fn handleConnect(client: *ShinyDbClient, args_str: []const u8) void {
         return;
     };
 
-    std.debug.print("Connected to {s}:{d}\n", .{ new_host, new_port });
+    var result = client.authenticate(userid, password) catch |err| {
+        std.debug.print("Connected but login failed ({}). Use .login <username> <password>.\n", .{err});
+        return;
+    };
+    defer result.deinit();
+    std.debug.print("✓ Connected to {s}:{d} as '{s}'\n", .{ new_host, new_port, userid });
 }
 
 // ========== Query Commands ==========
