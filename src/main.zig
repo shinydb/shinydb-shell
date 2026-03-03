@@ -363,6 +363,9 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
             } else if (std.mem.startsWith(u8, input, ".connect")) {
                 const args_str = std.mem.trim(u8, input[".connect".len..], " ");
                 handleConnect(client, args_str);
+            } else if (std.mem.startsWith(u8, input, ".get ")) {
+                const args_str = std.mem.trim(u8, input[".get ".len..], " \t");
+                handleGet(allocator, client, io, args_str);
             } else {
                 std.debug.print("Unknown command: {s}\n", .{input});
                 std.debug.print("Type .help for available commands.\n", .{});
@@ -406,6 +409,8 @@ fn printShellHelp() void {
         \\    .drop store <space.store>
         \\    .drop index <space.store.idx>
         \\    .drop user <username>
+        \\
+        \\    .get <space.store> <key>     Retrieve a document by its key
         \\
         \\YQL SYNTAX:
         \\    space.store.filter(field op value).orderBy(field, asc|desc).limit(n)
@@ -796,6 +801,57 @@ fn handleRestore(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anyty
     }
 }
 
+fn handleGet(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype, args_str: []const u8) void {
+    var it = std.mem.tokenizeAny(u8, args_str, " \t");
+    const ns = it.next() orelse {
+        std.debug.print("Usage: .get <space.store> <key>\n", .{});
+        return;
+    };
+    const id_hex = it.next() orelse {
+        std.debug.print("Usage: .get <space.store> <key>\n", .{});
+        return;
+    };
+
+    const id = std.fmt.parseInt(u128, id_hex, 16) catch {
+        std.debug.print("Invalid key '{s}': expected 32-char hex string\n", .{id_hex});
+        return;
+    };
+
+    // Parse namespace into space and store components
+    var ns_it = std.mem.splitScalar(u8, ns, '.');
+    const space_name = ns_it.next() orelse {
+        std.debug.print("Invalid namespace '{s}': expected <space.store>\n", .{ns});
+        return;
+    };
+    const store_name = ns_it.next() orelse {
+        std.debug.print("Invalid namespace '{s}': expected <space.store>\n", .{ns});
+        return;
+    };
+
+    var query = Query.init(client);
+    defer query.deinit();
+
+    var response = query.space(space_name).store(store_name).readById(id).run() catch |err| {
+        std.debug.print("Get failed: {}\n", .{err});
+        return;
+    };
+    defer response.deinit();
+
+    if (response.data) |data| {
+        var stdout_buf: [4096]u8 = undefined;
+        const stdout_file = std.Io.File.stdout();
+        var stdout_w = stdout_file.writer(io, &stdout_buf);
+        const out_writer = &stdout_w.interface;
+
+        formatter.printBsonDocument(allocator, data, out_writer) catch {
+            std.debug.print("Failed to format output\n", .{});
+        };
+        out_writer.flush() catch {};
+    } else {
+        std.debug.print("Not found\n", .{});
+    }
+}
+
 fn handleStats(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytype, args_str: []const u8) void {
     const tag: shinydb.StatsTag = if (args_str.len == 0)
         .AllStats
@@ -910,8 +966,14 @@ fn handleConnect(client: *ShinyDbClient, args_str: []const u8) void {
         std.debug.print("Error: invalid port '{s}'.\n", .{port_str});
         return;
     };
-    const userid = it.next() orelse "admin";
-    const password = it.next() orelse "admin";
+
+    var userid: []const u8 = "admin";
+    var password: []const u8 = "admin";
+
+    if (it.next()) |arg| {
+        userid = arg;
+        password = it.next() orelse "admin";
+    }
 
     // Disconnect existing connection
     client.disconnect();
@@ -996,6 +1058,32 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
     defer query.deinit();
 
     _ = query.space(space_name).store(store_name);
+
+    // Direct document lookup by ID (from .get(<key>) YQL syntax)
+    if (query_ast.doc_id) |doc_id| {
+        _ = query.readById(doc_id);
+
+        var response = query.run() catch |err| {
+            std.debug.print("Get failed: {}\n", .{err});
+            return;
+        };
+        defer response.deinit();
+
+        if (response.data) |data| {
+            var stdout_buf: [4096]u8 = undefined;
+            const stdout_file = std.Io.File.stdout();
+            var stdout_w = stdout_file.writer(io, &stdout_buf);
+            const out_writer = &stdout_w.interface;
+
+            formatter.printBsonDocument(allocator, data, out_writer) catch {
+                std.debug.print("Failed to format output\n", .{});
+            };
+            out_writer.flush() catch {};
+        } else {
+            std.debug.print("Not found\n", .{});
+        }
+        return;
+    }
 
     // Apply filters
     for (query_ast.filters.items) |filter| {
