@@ -1069,6 +1069,15 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
         };
         defer response.deinit();
 
+        if (!response.success) {
+            if (response.error_message) |msg| {
+                std.debug.print("{s}\n", .{msg});
+            } else {
+                std.debug.print("Get failed\n", .{});
+            }
+            return;
+        }
+
         if (response.data) |data| {
             var stdout_buf: [4096]u8 = undefined;
             const stdout_file = std.Io.File.stdout();
@@ -1098,6 +1107,11 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
     // Apply skip
     if (query_ast.skip_val) |sk| {
         _ = query.skip(sk);
+    }
+
+    // Apply cursor
+    if (query_ast.after_val) |av| {
+        _ = query.after(av);
     }
 
     // Apply orderBy
@@ -1148,6 +1162,15 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
         return;
     };
     defer response.deinit();
+
+    if (!response.success) {
+        if (response.error_message) |msg| {
+            std.debug.print("{s}\n", .{msg});
+        } else {
+            std.debug.print("Query failed\n", .{});
+        }
+        return;
+    }
 
     // Print result
     if (response.data) |data| {
