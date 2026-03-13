@@ -11,7 +11,7 @@
             .path = "../bson",
         },
         .shinydb_zig_client = .{
-            .path = "../shinydb-zig-client",
+            .path = "../schnelldb-zig-client",
         },
     },
     .paths = .{

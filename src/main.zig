@@ -82,9 +82,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Parse command line args for host/port
+    // Parse command line args for host/port or connection string
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 23469;
+    var connection_string: ?[]const u8 = "127.0.0.1:23469;uid=admin;key=NH8ohl2LHDT8xSJbHGPAsCluCh5pe8Ldn+hckcJovXk=;tls=true";
 
     var args_iter = std.process.Args.Iterator.init(init.args);
     _ = args_iter.next(); // skip program name
@@ -95,6 +96,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
         } else if (std.mem.eql(u8, arg, "--port")) {
             const port_str = args_iter.next() orelse "23469";
             port = std.fmt.parseInt(u16, port_str, 10) catch 23469;
+        } else if (std.mem.eql(u8, arg, "--connection")) {
+            connection_string = args_iter.next() orelse {
+                std.debug.print("Error: --connection requires a connection string argument\n", .{});
+                std.debug.print("Format: host:port;uid=<username>;key=<base64-key>\n", .{});
+                return;
+            };
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             printHelp();
             return;
@@ -102,7 +109,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     // Start REPL
-    try runRepl(allocator, host, port);
+    try runRepl(allocator, host, port, connection_string);
 }
 
 fn printHelp() void {
@@ -113,6 +120,7 @@ fn printHelp() void {
         \\    shinydb-cli [OPTIONS]
         \\
         \\OPTIONS:
+        \\    --connection <STR>  Connection string (host:port;uid=xxx;key=xxx)
         \\    --host <HOST>      Server host (default: 127.0.0.1)
         \\    --port <PORT>      Server port (default: 23469)
         \\    --help, -h         Show this help
@@ -132,7 +140,7 @@ fn printHelp() void {
         \\    .create space <name> [description]
         \\    .create store <space.store> [description]
         \\    .create index <space.store.index> <field> <type>
-        \\    .create user <username> <password> <role>
+        \\    .create user <username> <role>
         \\
         \\    .drop space <name>
         \\    .drop store <space.store>
@@ -157,7 +165,7 @@ fn printHelp() void {
     std.debug.print("{s}", .{help});
 }
 
-fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
+fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16, connection_string: ?[]const u8) !void {
     // Setup I/O
     var threaded: std.Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
@@ -167,22 +175,21 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
     var client = try ShinyDbClient.init(allocator, io);
     defer client.deinit();
 
-    std.debug.print("Connecting to shinydb at {s}:{d}...\n", .{ host, port });
-    client.connect(host, port) catch |err| {
-        std.debug.print("Connection failed: {}\n", .{err});
-        std.debug.print("Make sure shinydb server is running.\n", .{});
+    if (connection_string) |conn_str| {
+        std.debug.print("Connecting with connection string...\n", .{});
+        var result = client.connect(conn_str) catch |err| {
+            std.debug.print("Connection failed: {}\n", .{err});
+            return;
+        };
+        result.deinit();
+        std.debug.print("Connected and authenticated. Type .help for commands, .exit to quit.\n\n", .{});
+    } else {
+        std.debug.print("Connecting to shinydb at {s}:{d}...\n", .{ host, port });
+        std.debug.print("Use --connection flag with full connection string to connect.\n", .{});
+        std.debug.print("Format: --connection \"host:port;uid=<user>;key=<key>;tls=true\"\n", .{});
         return;
-    };
-    defer client.disconnect();
-
-    std.debug.print("Connected. Authenticating...\n", .{});
-    if (client.authenticate("admin", "admin")) |result| {
-        var auth_result = result;
-        defer auth_result.deinit();
-        std.debug.print("✓ Logged in as admin. Type .help for commands, .exit to quit.\n\n", .{});
-    } else |err| {
-        std.debug.print("Auto-login failed ({}). Use .login <username> <password>.\n\n", .{err});
     }
+    defer client.disconnect();
 
     // Initialize command history
     var history = CommandHistory.init(allocator);
@@ -357,6 +364,9 @@ fn runRepl(allocator: std.mem.Allocator, host: []const u8, port: u16) !void {
                 handleSetMode(allocator, client, false);
             } else if (std.mem.eql(u8, input, ".online")) {
                 handleSetMode(allocator, client, true);
+            } else if (std.mem.startsWith(u8, input, ".regenerate key ")) {
+                const args_str = std.mem.trim(u8, input[".regenerate key ".len..], " \t");
+                handleRegenerateKey(client, args_str);
             } else if (std.mem.startsWith(u8, input, ".login")) {
                 const args_str = std.mem.trim(u8, input[".login".len..], " \t");
                 handleLogin(client, args_str);
@@ -385,14 +395,18 @@ fn printShellHelp() void {
         \\    .help              Show this help
         \\    .cls               Clear screen
         \\    .exit, .quit       Exit the shell
-        \\    .login <user> <pass>  Authenticate (auto-login as admin on connect)
+        \\    .login <uid> <key>    Authenticate with uid and key
         \\    .shutdown          Shutdown the database server
         \\    .stats [layer]     Show engine metrics (wal|db|index|vlog|gc or all)
         \\    .vlogs             Show vlog storage stats (dead ratio, bytes, counts)
         \\    .offline           Put server in offline mode (admin-only ops)
         \\    .online            Bring server back to online mode (all ops)
-        \\    .connect <host> <port> [userid] [password]
-        \\                        Connect to a server (default creds: admin/admin)
+        \\    .connect <connection_string>
+        \\                        Connect using host:port;uid=xxx;key=xxx
+        \\    .connect <host> <port> <uid> <key>
+        \\                        Connect with explicit host, port, uid, key
+        \\    .regenerate key <username>
+        \\                        Regenerate auth key for a user (admin only)
         \\
         \\MANAGEMENT COMMANDS:
         \\    .spaces                     List all spaces
@@ -403,14 +417,14 @@ fn printShellHelp() void {
         \\    .create space <name> [desc]
         \\    .create store <space.store> [desc]
         \\    .create index <space.store.idx> <field> <String|I32|I64|F64|Boolean>
-        \\    .create user <username> <password> <0=admin|1=read_write|2=read_only>
+        \\    .create user <username> <0=admin|1=read_write|2=read_only>
         \\
         \\    .drop space <name>
         \\    .drop store <space.store>
         \\    .drop index <space.store.idx>
         \\    .drop user <username>
         \\
-        \\    .get <space.store> <key>     Retrieve a document by its key
+        \\    .get <space.store> <key>      Retrieve a document by its key
         \\
         \\YQL SYNTAX:
         \\    space.store.filter(field op value).orderBy(field, asc|desc).limit(n)
@@ -630,15 +644,11 @@ fn handleCreate(client: *ShinyDbClient, allocator: std.mem.Allocator, args: []co
         std.debug.print("✓ Created index '{s}' on field '{s}' ({s})\n", .{ ns, field, field_type_str });
     } else if (std.mem.eql(u8, entity_type, "user")) {
         const username = iter.next() orelse {
-            std.debug.print("Usage: .create user <username> <password> <0=admin|1=read_write|2=read_only>\n", .{});
-            return;
-        };
-        const password = iter.next() orelse {
-            std.debug.print("Usage: .create user <username> <password> <0=admin|1=read_write|2=read_only>\n", .{});
+            std.debug.print("Usage: .create user <username> <0=admin|1=read_write|2=read_only>\n", .{});
             return;
         };
         const role_str = iter.next() orelse {
-            std.debug.print("Usage: .create user <username> <password> <0=admin|1=read_write|2=read_only>\n", .{});
+            std.debug.print("Usage: .create user <username> <0=admin|1=read_write|2=read_only>\n", .{});
             return;
         };
         const role = std.fmt.parseInt(u8, role_str, 10) catch {
@@ -649,7 +659,7 @@ fn handleCreate(client: *ShinyDbClient, allocator: std.mem.Allocator, args: []co
         client.create(shinydb.User{
             .id = 0,
             .username = username,
-            .password_hash = password,
+            .password_hash = "",
             .role = role,
             .created_at = 0,
         }) catch |err| {
@@ -663,6 +673,8 @@ fn handleCreate(client: *ShinyDbClient, allocator: std.mem.Allocator, args: []co
             else => "unknown",
         };
         std.debug.print("✓ Created user '{s}' with role '{s}'\n", .{ username, role_name });
+        std.debug.print("  The server has generated an auth key for this user.\n", .{});
+        std.debug.print("  Check the server response/logs for the connection string.\n", .{});
     } else {
         std.debug.print("Unknown entity type: {s}\n", .{entity_type});
         std.debug.print("Use: space, store, index, or user\n", .{});
@@ -928,68 +940,31 @@ fn handleSetMode(allocator: std.mem.Allocator, client: *ShinyDbClient, online: b
 }
 
 fn handleLogin(client: *ShinyDbClient, args: []const u8) void {
-    var it = std.mem.tokenizeAny(u8, args, " \t");
-    const username = it.next() orelse {
-        std.debug.print("Usage: .login <username> <password>\n", .{});
-        return;
-    };
-    const password = it.next() orelse {
-        std.debug.print("Usage: .login <username> <password>\n", .{});
-        return;
-    };
-    var result = client.authenticate(username, password) catch |err| {
-        std.debug.print("Login failed: {}\n", .{err});
-        return;
-    };
-    defer result.deinit();
-    std.debug.print("✓ Logged in as '{s}'\n", .{username});
+    _ = client;
+    _ = args;
+    std.debug.print("Use .connect with a connection string instead.\n", .{});
+    std.debug.print("Format: .connect host:port;uid=<user>;key=<key>;tls=true\n", .{});
+}
+
+fn handleRegenerateKey(_: *ShinyDbClient, _: []const u8) void {
+    std.debug.print("regenerateKey not yet implemented in client\n", .{});
 }
 
 fn handleConnect(client: *ShinyDbClient, args_str: []const u8) void {
     if (args_str.len == 0) {
-        std.debug.print("Usage: .connect <host> <port> [userid] [password]\n", .{});
-        std.debug.print("  Defaults to admin/admin when credentials are omitted.\n", .{});
+        std.debug.print("Usage: .connect <connection_string>\n", .{});
+        std.debug.print("  Format: host:port;uid=xxx;key=xxx;tls=true\n", .{});
         return;
     }
 
-    // Parse arguments: host port [userid] [password]
-    var it = std.mem.tokenizeAny(u8, args_str, " \t");
-    const new_host = it.next() orelse {
-        std.debug.print("Error: host is required.\n", .{});
-        return;
-    };
-    const port_str = it.next() orelse {
-        std.debug.print("Error: port is required.\n", .{});
-        return;
-    };
-    const new_port = std.fmt.parseInt(u16, port_str, 10) catch {
-        std.debug.print("Error: invalid port '{s}'.\n", .{port_str});
-        return;
-    };
-
-    var userid: []const u8 = "admin";
-    var password: []const u8 = "admin";
-
-    if (it.next()) |arg| {
-        userid = arg;
-        password = it.next() orelse "admin";
-    }
-
-    // Disconnect existing connection
     client.disconnect();
-
-    std.debug.print("Connecting to shinydb at {s}:{d}...\n", .{ new_host, new_port });
-    client.connect(new_host, new_port) catch |err| {
+    std.debug.print("Connecting...\n", .{});
+    var result = client.connect(args_str) catch |err| {
         std.debug.print("Connection failed: {}\n", .{err});
         return;
     };
-
-    var result = client.authenticate(userid, password) catch |err| {
-        std.debug.print("Connected but login failed ({}). Use .login <username> <password>.\n", .{err});
-        return;
-    };
-    defer result.deinit();
-    std.debug.print("✓ Connected to {s}:{d} as '{s}'\n", .{ new_host, new_port, userid });
+    result.deinit();
+    std.debug.print("Connected and authenticated.\n", .{});
 }
 
 // ========== Query Commands ==========
