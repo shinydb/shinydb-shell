@@ -738,8 +738,7 @@ fn handleCollect(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anyty
         std.debug.print("Usage: .collect <vlog id>\n", .{});
         return;
     } else {
-        const vlog_id: u8 = try std.fmt.parseInt(u8, args_str, 8);
-        const data = client.collect(vlog_id) catch |err| {
+        const data = client.collect(args_str) catch |err| {
             std.debug.print("Garbage Collection Failed: {}\n", .{err});
             return;
         };
@@ -1093,6 +1092,13 @@ fn executeQuery(allocator: std.mem.Allocator, client: *ShinyDbClient, io: anytyp
     if (query_ast.order_by) |ob| {
         for (ob.items) |spec| {
             _ = query.orderBy(spec.field, spec.direction);
+        }
+    }
+
+    // Apply projection (pluck/select)
+    if (query_ast.projection) |proj| {
+        if (proj.items.len > 0) {
+            _ = query.select(proj.items);
         }
     }
 
